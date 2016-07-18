@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <title>PokeScanner</title>
+    <title>Pokemon map</title>
     <meta name="viewport" content="initial-scale=1.0, user-scalable=no">
     <meta charset="utf-8">
     <style>
@@ -65,24 +65,6 @@
         return n.length >= width ? n : new Array(width - n.length + 1).join(z) + n;
       }
 
-      function formatSeconds(s) {
-        var date = new Date(null);
-        date.setSeconds(s);
-
-        return (date.getUTCMinutes() > 0 ? date.getUTCMinutes() + "m " : "") + date.getUTCSeconds() + "s";
-      }
-
-      function getImage(p) {
-        var name = p.name;
-        if (p.name == "Nidoran F") {
-          name = "Nidoran";
-        }
-        else if (name == "Nidoran M") {
-          name = "Nidorano";
-        }
-        return "http://icons.iconarchive.com/icons/hektakun/pokemon/72/" + pad(p.id, 3) + "-" + cap(name) + "-icon.png";
-      }
-
       function toggleLayer(checked, pkmn) {
         if (checked) {
             hidden_layers.push(pkmn);
@@ -95,26 +77,36 @@
         refreshData();
       };
 
+      // listeners = [];
+      // markers = [];
+      hashes = {};
 
       function refreshData() {
         getFile("data.json", true, function(response) {
           console.log("Refreshing data...");
-          var preLength = data.length;
+          // var preLength = data.length;
           data = JSON.parse(response);
 
-          if (preLength != data.length) {
+          // if (preLength != data.length) {
             // Clear markers
-            for (var i = 0; i < markers.length; i++) {
-              listeners[i].a.remove();
-              listeners[i].b.remove();
-              markers[i].setMap(null);
-            }
-            listeners = [];
-            markers = [];
+            // for (var i = 0; i < markers.length; i++) {
+            //   listeners[i].a.remove();
+            //   listeners[i].b.remove();
+            //   markers[i].setMap(null);
+            // }
+            // listeners = [];
+            // markers = [];
 
             // Add updated markers
             for (var i = 0; i < data.length; i++) {
               var p = data[i];
+
+              hash = p.hash;
+              if (hash in hashes) {
+                continue;
+              }
+              hashes[hash] = true;
+
               if (!updated) {
                 map.setZoom(16);
                 map.panTo({lat: p.lat, lng: p.lng});
@@ -126,56 +118,59 @@
                 if(layers.indexOf(p.name) == -1){
                   layers.push(p.name);
                 }
-                console.log("Adding marker " + p.name);
+                // console.log("Adding marker " + p.name);
 
                 var infowindow = new google.maps.InfoWindow({
                 });
 
-                var image = getImage(p);
+                var image = "http://icons.iconarchive.com/icons/hektakun/pokemon/72/" + pad(p.id, 3) + "-" + cap(p.name) + "-icon.png";
 
                 var marker = new google.maps.Marker({
                   map: map,
                   position: {lat: p.lat, lng: p.lng},
                   label: "",
-                  title: "<b>"+p.name+"</b><br>Time left: " + formatSeconds(p.timeleft) + "<br>Lat: "+p.lat+"<br>Long: "+p.lng,
+                  title: "<b>"+p.name+"</b><br>Time left: " + p.timeleft + "s<br>Lat: "+p.lat+"<br>Long: "+p.lng,
                   icon: image
                 });
 
-                var listenerPair = {
-                  a: google.maps.event.addListener(marker, 'mouseover', function() {
-                    infowindow.setContent(this.title);
-                    infowindow.open(map, this);
-                  }),
+                var mouseOverListener = google.maps.event.addListener(marker, 'mouseover', function() {
+                  infowindow.setContent(this.title);
+                  infowindow.open(map, this);
+                });
 
-                  b: google.maps.event.addListener(marker, 'mouseout', function() {
-                    infowindow.close(map, this);
-                  })
-                };
+                var mouseOutListener = google.maps.event.addListener(marker, 'mouseout', function() {
+                  infowindow.close(map, this);
+                });
 
-                listeners.push(listenerPair);
-                markers.push(marker);
+                // setTimeout(function(mouseOverListener, mouseOutListener, marker, hash) {
+                //   return function() {
+                //     mouseOverListener.remove();
+                //     mouseOutListener.remove();
+                //     marker.setMap(null);
+                //   }
+                // }(mouseOverListener, mouseOutListener, marker, hash), p.timeleft * 1000);
               }
             }
 
             // Draw layer manager
-            var list = document.getElementById('legend-list');
-            var content = [];
-            for (var id in layers) {
-              var pkmn = layers[id];
-              var checked = hidden_layers.indexOf(pkmn) != -1 ? "checked": "";
-              content.push("<li><input type='checkbox' id='" + pkmn +  "'" +
-              " onclick='toggleLayer(this.checked, this.id)' "+checked+"\/>" +
-              pkmn + "<\/li>");
-            }
-            list.innerHTML = content.join('');
-          }
+            // var list = document.getElementById('legend-list');
+            // var content = [];
+            // for (var id in layers) {
+            //   var pkmn = layers[id];
+            //   var checked = hidden_layers.indexOf(pkmn) != -1 ? "checked": "";
+            //   content.push("<li><input type='checkbox' id='" + pkmn +  "'" +
+            //   " onclick='toggleLayer(this.checked, this.id)' "+checked+"\/>" +
+            //   pkmn + "<\/li>");
+            // }
+            // list.innerHTML = content.join('');
+          // }
         });
       }
 
       data = {};
       map = null;
-      markers = [];
-      listeners = [];
+      // markers = [];
+      // listeners = [];
       hidden_layers = [];
       layers = [];
       updated = false;
@@ -189,22 +184,21 @@
 
       function initMap() {
         console.log("Initializing map");
+        setInterval(refreshData, 1000);
 
         map = new google.maps.Map(document.getElementById('map'), {
           center: {lat: 0, lng: 0},
           zoom: 4
         });
 
-        var legend = document.createElement('div');
-        legend.id = 'legend';
-        var content = [];
-        content.push('<h3>Hide Pokemon</h3>');
-        content.push('<div id="legend-list"></div>');
-        legend.innerHTML = content.join('');
-        legend.index = 1;
-        map.controls[google.maps.ControlPosition.RIGHT_BOTTOM].push(legend);
-
-        setInterval(refreshData, 1000);
+        // var legend = document.createElement('div');
+        // legend.id = 'legend';
+        // var content = [];
+        // content.push('<h3>Hide Pokemon</h3>');
+        // content.push('<div id="legend-list"></div>');
+        // legend.innerHTML = content.join('');
+        // legend.index = 1;
+        // map.controls[google.maps.ControlPosition.RIGHT_BOTTOM].push(legend);
       }
     </script>
   </body>

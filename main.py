@@ -32,7 +32,28 @@ def getNeighbors():
         prev = prev.prev()
     return walk
 
+def intSpiralGen(size):
+    x = y = 0
+    dx = 0
+    dy = -1
+    for i in range(size**2):
+        # if -size/2 < x and x <= size/2 and -size/2 < y and y <= size/2:
+        yield (x, y)
+        if x == y or (x < 0 and x == -y) or (x > 0 and x == 1-y):
+            dx, dy = -dy, dx
+        x, y = x + dx, y + dy
 
+# generates (lat, lon) tuples
+def getSpiralGen(lat, lon, step_distance=100, max_distance=6000):
+    # Using estimate that 111,111m is 1 degree lat/long.
+    deg_distance = float(step_distance) / 111111
+    num_steps = max_distance / step_distance
+
+    result = []
+    while True:
+        for (x, y) in intSpiralGen(num_steps):
+            print x,y
+            yield (lat + x * deg_distance, lon + y * deg_distance)
 
 API_URL = 'https://pgorelease.nianticlabs.com/plfe/rpc'
 LOGIN_URL = 'https://sso.pokemon.com/sso/login?service=https%3A%2F%2Fsso.pokemon.com%2Fsso%2Foauth2.0%2FcallbackAuthorize'
@@ -48,10 +69,8 @@ COORDS_LONGITUDE = 0
 COORDS_ALTITUDE = 0
 FLOAT_LAT = 0
 FLOAT_LONG = 0
-deflat, deflng = 0, 0
-default_step = 0.001
 
-NUM_STEPS = 5
+NUM_STEPS = 20
 DATA_FILE = 'data.json'
 DATA = []
 
@@ -66,12 +85,12 @@ def h2f(hex):
 
 def prune():
     # prune despawned pokemon
-    cur_time = int(time.time())
-    for i, poke in reversed(list(enumerate(DATA))):
-        poke['timeleft'] = poke['timeleft'] - (cur_time - poke['timestamp'])
-        poke['timestamp'] = cur_time
-        if poke['timeleft'] <= 0:
-            DATA.pop(i)
+    # cur_time = int(time.time())
+    # for i, poke in reversed(list(enumerate(DATA))):
+    #     poke['timeleft'] = poke['timeleft'] - (cur_time - poke['timestamp'])
+    #     poke['timestamp'] = cur_time
+    #     if poke['timeleft'] <= 0:
+    #         DATA.pop(i)
 
 def write_data_to_file():
     prune()
@@ -79,14 +98,15 @@ def write_data_to_file():
     with open(DATA_FILE, 'w') as f:
         json.dump(DATA, f, indent=2)
 
-def add_pokemon(pokeId, name, lat, lng, timestamp, timeleft):
+def add_pokemon(pokeId, name, lat, lng, timestamp, timeleft, hashId):
     DATA.append({
         'id': pokeId,
         'name': name,
         'lat': lat,
         'lng': lng,
         'timestamp': timestamp,
-        'timeleft': timeleft
+        'timeleft': timeleft,
+        'hash': hashId
     });
 
 def set_location(location_name):
@@ -95,11 +115,6 @@ def set_location(location_name):
 
     print('[!] Your given location: {}'.format(loc.address.encode('utf-8')))
     print('[!] lat/long/alt: {} {} {}'.format(loc.latitude, loc.longitude, loc.altitude))
-
-    global deflat
-    global deflng
-    deflat, deflng = loc.latitude, loc.longitude
-
     set_location_coords(loc.latitude, loc.longitude, loc.altitude)
 
 def set_location_coords(lat, long, alt):
@@ -152,9 +167,7 @@ def api_req(api_endpoint, access_token, *mehs, **kw):
                 print(p_ret)
                 print("\n\n")
 
-            if DEBUG:
-                print("[ ] Sleeping for 1 second")
-            time.sleep(1)
+            time.sleep(.2)
             return p_ret
         except Exception, e:
             if DEBUG:
@@ -200,7 +213,6 @@ def get_api_endpoint(access_token, api = API_URL):
     except:
         return None
 
-
 def login_ptc(username, password):
     print('[!] login for: {}'.format(username))
     head = {'User-Agent': 'niantic'}
@@ -235,11 +247,13 @@ def login_ptc(username, password):
     access_token = re.sub('.*access_token=', '', access_token)
     return access_token
 
-def raw_heartbeat(api_endpoint, access_token, response):
+def heartbeat(api_endpoint, access_token, response):
     m4 = pokemon_pb2.RequestEnvelop.Requests()
+
     m = pokemon_pb2.RequestEnvelop.MessageSingleInt()
     m.f1 = int(time.time() * 1000)
     m4.message = m.SerializeToString()
+
     m5 = pokemon_pb2.RequestEnvelop.Requests()
     m = pokemon_pb2.RequestEnvelop.MessageSingleString()
     m.bytes = "05daf51635c82611d1aac95c0b051d3ec088a930"
@@ -249,12 +263,14 @@ def raw_heartbeat(api_endpoint, access_token, response):
 
     m1 = pokemon_pb2.RequestEnvelop.Requests()
     m1.type = 106
+
     m = pokemon_pb2.RequestEnvelop.MessageQuad()
     m.f1 = ''.join(map(encode, walk))
     m.f2 = "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000"
     m.lat = COORDS_LATITUDE
     m.long = COORDS_LONGITUDE
     m1.message = m.SerializeToString()
+
     response = get_profile(
         access_token,
         api_endpoint,
@@ -268,82 +284,6 @@ def raw_heartbeat(api_endpoint, access_token, response):
     heartbeat = pokemon_pb2.ResponseEnvelop.HeartbeatPayload()
     heartbeat.ParseFromString(payload)
     return heartbeat
-
-def heartbeat(api_endpoint, access_token, response):
-    while True:
-        try:
-            h = raw_heartbeat(api_endpoint, access_token, response)
-            return h
-        except Exception, e:
-            if DEBUG:
-                print(e)
-            print('[-] Heartbeat missed, retrying')
-
-
-def scan(api_endpoint, access_token, response, origin, pokemons):
-    steps = 0
-    steplimit = NUM_STEPS
-    pos = 1
-    x   = 0
-    y   = 0
-    dx  = 0
-    dy  = -1
-    while steps < steplimit**2:
-        original_lat = FLOAT_LAT
-        original_long = FLOAT_LONG
-        parent = CellId.from_lat_lng(LatLng.from_degrees(FLOAT_LAT, FLOAT_LONG)).parent(15)
-
-        h = heartbeat(api_endpoint, access_token, response)
-        hs = [h]
-        seen = set([])
-        for child in parent.children():
-            latlng = LatLng.from_point(Cell(child).get_center())
-            set_location_coords(latlng.lat().degrees, latlng.lng().degrees, 0)
-            hs.append(heartbeat(api_endpoint, access_token, response))
-        set_location_coords(original_lat, original_long, 0)
-
-        visible = []
-
-        for hh in hs:
-            for cell in hh.cells:
-                for wild in cell.WildPokemon:
-                    hash = wild.SpawnPointId + ':' + str(wild.pokemon.PokemonId)
-                    if (hash not in seen):
-                        visible.append(wild)
-                        seen.add(hash)
-
-        for cell in h.cells:
-            if cell.NearbyPokemon:
-                other = LatLng.from_point(Cell(CellId(cell.S2CellId)).get_center())
-                diff = other - origin
-                # print(diff)
-                difflat = diff.lat().degrees
-                difflng = diff.lng().degrees
-                if len(cell.NearbyPokemon) > 0:
-                    print('[+] Found pokemon!')
-                for poke in cell.NearbyPokemon:
-                        print('    (%s) %s' % (poke.PokedexNumber, pokemons[poke.PokedexNumber - 1]['Name']))
-
-        for poke in visible:
-            other = LatLng.from_degrees(poke.Latitude, poke.Longitude)
-            diff = other - origin
-            # print(diff)
-            difflat = diff.lat().degrees
-            difflng = diff.lng().degrees
-
-            timestamp = int(time.time())
-            add_pokemon(poke.pokemon.PokemonId, pokemons[poke.pokemon.PokemonId - 1]['Name'], poke.Latitude, poke.Longitude, timestamp, poke.TimeTillHiddenMs / 1000)
-
-        write_data_to_file()
-
-        if (-steplimit/2 < x <= steplimit/2) and (-steplimit/2 < y <= steplimit/2):
-            set_location_coords((x * 0.0025) + deflat, (y * 0.0025 ) + deflng, 0)
-        if x == y or (x < 0 and x == -y) or (x > 0 and x == 1-y):
-            dx, dy = -dy, dx
-        x, y = x+dx, y+dy
-        steps +=1
-
-        print('[+] Scan: %0.1f %%' % (((steps + (pos * .25) - .25) / steplimit**2) * 100))
 
 def main():
     write_data_to_file()
@@ -365,7 +305,7 @@ def main():
 
     access_token = login_ptc(args.username, args.password)
     if access_token is None:
-        print('[-] Error logging in: possible wrong username/password')
+        print('[-] Wrong username/password')
         return
     print('[+] RPC Session Token: {} ...'.format(access_token[:25]))
 
@@ -394,10 +334,73 @@ def main():
     else:
         print('[-] Ooops...')
 
-    origin = LatLng.from_degrees(FLOAT_LAT, FLOAT_LONG)
-
+    # step = 0
+    seen = set([])
+    spiral = getSpiralGen(FLOAT_LAT, FLOAT_LONG)
     while True:
-        scan(api_endpoint, access_token, response, origin, pokemons)
+        # original_lat = FLOAT_LAT
+        # original_long = FLOAT_LONG
+        origin = LatLng.from_degrees(FLOAT_LAT, FLOAT_LONG)
+        # parent = CellId.from_lat_lng(LatLng.from_degrees(FLOAT_LAT, FLOAT_LONG)).parent(15)
+
+        (lat, lon) = next(spiral)
+        print lat,lon
+        set_location_coords(lat, lon, 0)
+        h = heartbeat(api_endpoint, access_token, response)
+        hs = [h]
+        # for child in parent.children():
+        #     latlng = LatLng.from_point(Cell(child).get_center())
+        #     set_location_coords(latlng.lat().degrees, latlng.lng().degrees, 0)
+        #     hs.append(heartbeat(api_endpoint, access_token, response))
+        # set_location_coords(original_lat, original_long, 0)
+
+        visible = []
+
+        for hh in hs:
+            for cell in hh.cells:
+                for wild in cell.WildPokemon:
+                    hash = wild.SpawnPointId + ':' + str(wild.pokemon.PokemonId)
+                    if (hash not in seen):
+                        visible.append(wild)
+                        seen.add(hash)
+
+        # print('')
+        # for cell in h.cells:
+        #     if cell.NearbyPokemon:
+        #         other = LatLng.from_point(Cell(CellId(cell.S2CellId)).get_center())
+        #         diff = other - origin
+        #         # print(diff)
+        #         difflat = diff.lat().degrees
+        #         difflng = diff.lng().degrees
+        #         direction = (('N' if difflat >= 0 else 'S') if abs(difflat) > 1e-4 else '')  + (('E' if difflng >= 0 else 'W') if abs(difflng) > 1e-4 else '')
+        #         print("Within one step of %s (%sm %s from you):" % (other, int(origin.get_distance(other).radians * 6366468.241830914), direction))
+        #         for poke in cell.NearbyPokemon:
+        #             print('    (%s) %s' % (poke.PokedexNumber, pokemons[poke.PokedexNumber - 1]['Name']))
+
+        print('')
+        for poke in visible:
+            other = LatLng.from_degrees(poke.Latitude, poke.Longitude)
+            diff = other - origin
+            difflat = diff.lat().degrees
+            difflng = diff.lng().degrees
+            direction = (('N' if difflat >= 0 else 'S') if abs(difflat) > 1e-4 else '')  + (('E' if difflng >= 0 else 'W') if abs(difflng) > 1e-4 else '')
+
+            print("(%s) %s is visible at (%s, %s) for %s seconds (%sm %s from you)" % (poke.pokemon.PokemonId, pokemons[poke.pokemon.PokemonId - 1]['Name'], poke.Latitude, poke.Longitude, poke.TimeTillHiddenMs / 1000, int(origin.get_distance(other).radians * 6366468.241830914), direction))
+
+            timestamp = int(time.time())
+            add_pokemon(poke.pokemon.PokemonId, pokemons[poke.pokemon.PokemonId - 1]['Name'], poke.Latitude, poke.Longitude, timestamp, poke.TimeTillHiddenMs / 1000, wild.SpawnPointId + ':' + str(wild.pokemon.PokemonId))
+
+        write_data_to_file()
+        # print('')
+        # walk = getNeighbors()
+        # next = LatLng.from_point(Cell(CellId(walk[2])).get_center())
+        # #if raw_input('The next cell is located at %s. Keep scanning? [Y/n]' % next) in {'n', 'N'}:
+        # #    break
+        # step += 1
+        # set_location_coords(next.lat().degrees, next.lng().degrees, 0)
+        # if step >= NUM_STEPS:
+        #     set_location_coords(original_lat, original_long, 0)
+        #     step = 0
 
 
 if __name__ == '__main__':
